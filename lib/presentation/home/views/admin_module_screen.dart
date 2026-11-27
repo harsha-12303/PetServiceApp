@@ -9,8 +9,9 @@ import '../../../core/network/api_config.dart';
 import '../../../domain/entities/models.dart';
 import '../../../domain/repositories/admin_module_repository.dart';
 import '../../shared/widgets/product_card.dart';
-import '../../shared/widgets/search_filter_panel.dart';
+import '../../shared/widgets/blueprint_search_bar.dart';
 import 'module_record_screen.dart';
+import 'record_views.dart';
 
 class AdminModuleScreen extends StatefulWidget {
   const AdminModuleScreen({
@@ -18,6 +19,7 @@ class AdminModuleScreen extends StatefulWidget {
     required this.item,
     required this.load,
     this.loadFiltered,
+    this.loadPage,
     this.loadSearchFields,
     this.loadCreateForm,
     this.createRecord,
@@ -29,6 +31,14 @@ class AdminModuleScreen extends StatefulWidget {
   final MenuItem item;
   final Future<AdminModuleData> Function() load;
   final Future<AdminModuleData> Function(Map<String, String>)? loadFiltered;
+
+  /// Like [loadFiltered], but reuses the page's already loaded
+  /// configuration (table blueprint) so searches and reloads after a save
+  /// cost a single request. Null configuration means load it afresh.
+  final Future<AdminModuleData> Function(
+    Map<String, String> filters,
+    AdminModuleConfiguration? configuration,
+  )? loadPage;
   final Future<List<SearchFilterField>?> Function()? loadSearchFields;
   final Future<ModuleRecordForm> Function(AdminModuleConfiguration)?
       loadCreateForm;
@@ -56,46 +66,101 @@ class AdminModuleScreen extends StatefulWidget {
 
 class _AdminModuleScreenState extends State<AdminModuleScreen> {
   late Future<AdminModuleData> _data;
-  late Future<List<SearchFilterField>?> _searchFields;
   Map<String, String> _filters = const {};
-  Timer? _searchDebounce;
   bool _runningAction = false;
 
+  /// Search-by-name in the header (🔍).
+  final _headerSearch = HeaderSearchController();
+
+  /// The page's blueprint, reused until the user refreshes.
+  AdminModuleConfiguration? _configuration;
+
+  /// The last unfiltered result, used to narrow the list instantly while
+  /// the user types (the server search then replaces it).
+  AdminModuleData? _unfiltered;
+
+  /// Bumped on refresh so the search bar reloads its blueprint too.
+  int _refreshCount = 0;
+
   bool get _canSearch =>
-      widget.loadFiltered != null && widget.loadSearchFields != null;
+      (widget.loadFiltered != null || widget.loadPage != null) &&
+      widget.loadSearchFields != null;
 
   String get _moduleCode => widget.item.code.trim().toLowerCase();
   bool get _isCategories => _moduleCode == 'categories';
   bool get _isOffers => _moduleCode == 'offers';
   bool get _usesTableLayout => _isCategories || _isOffers;
-  bool get _usesBlueprintControls =>
-      _moduleCode == 'brands' || _usesTableLayout;
-  bool get _hasInlineSearch => _canSearch && _usesBlueprintControls;
+  String get _searchHint => _isCategories
+      ? 'Search category name…'
+      : _moduleCode == 'brands'
+          ? 'Search brand name…'
+          : widget.item.isProductManagement
+              ? 'Search products…'
+              : 'Search…';
 
   @override
   void initState() {
     super.initState();
-    _data = widget.load();
-    if (_hasInlineSearch) _searchFields = widget.loadSearchFields!();
+    _data = _remember(widget.load());
   }
 
   @override
   void dispose() {
-    _searchDebounce?.cancel();
+    _headerSearch.dispose();
     super.dispose();
   }
+
+  Future<AdminModuleData> _remember(Future<AdminModuleData> data) {
+    final unfiltered = _filters.isEmpty;
+    return data.then((value) {
+      _configuration = value.configuration ?? _configuration;
+      if (unfiltered) _unfiltered = value;
+      return value;
+    });
+  }
+
+  /// Instant feedback while typing: narrow the already loaded list by the
+  /// text, before the server search (debounced) comes back.
+  void _narrowInstantly(String text) {
+    final base = _unfiltered;
+    if (base == null) return;
+    setState(() {
+      _data = Future.value(narrowAdminData(base, text));
+    });
+  }
+
+  /// Reloads everything from the server, blueprints included.
+  Future<void> _refresh() {
+    _configuration = null;
+    _refreshCount++;
+    _reloadRecords();
+    return _data.then((_) {}, onError: (_) {});
+  }
+
+  /// Makes [child] pullable even when it doesn't fill the screen.
+  Widget _pullable(Widget child) => LayoutBuilder(
+        builder: (context, constraints) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: constraints.maxHeight, child: child),
+          ],
+        ),
+      );
 
   @override
   Widget build(BuildContext context) {
     final records = FutureBuilder<AdminModuleData>(
       future: _data,
       builder: (context, snapshot) {
-        if (snapshot.connectionState != ConnectionState.done) {
+        final loading = snapshot.connectionState != ConnectionState.done;
+        // First load: spinner. Later reloads keep the current list on screen
+        // with a thin progress bar instead of blanking it.
+        if (loading && !snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
-        if (snapshot.hasError) {
+        if (!loading && snapshot.hasError) {
           final error = snapshot.error;
-          return Center(
+          return _pullable(Center(
             child: Padding(
               padding: const EdgeInsets.all(24),
               child: Column(
@@ -108,223 +173,176 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
                     textAlign: TextAlign.center,
                   ),
                   TextButton(
-                    onPressed: _reloadRecords,
+                    onPressed: _refresh,
                     child: const Text('Retry'),
                   ),
                 ],
               ),
             ),
-          );
+          ));
         }
         final data = snapshot.requireData;
-        if (data.records.isEmpty) {
-          return Center(
-              child:
-                  Text(_isOffers ? 'Nothing here yet.' : 'No records found.'));
-        }
-        final products = data.products;
-        if (products != null) {
-          return ProductGrid(
-            itemCount: products.length,
-            itemBuilder: (context, index) {
-              final item = products[index];
-              final config = data.configuration;
-              final edit = config?.rowActions
-                  .where((action) =>
-                      action.isEdit &&
-                      action.blueprintApi != null &&
-                      _canRunAction(action))
-                  .firstOrNull;
-              return ProductCard(
-                product: item.product,
-                imageBytes: item.imageBytes,
-                onTap: config != null && edit != null && !_runningAction
-                    ? () => _runRowAction(config, item.record, edit)
-                    : null,
-                actions: config?.rowActions.isNotEmpty == true
-                    ? SizedBox(
-                        width: double.infinity,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) => Align(
-                            alignment: Alignment.centerRight,
-                            child: _rowActions(
-                              config,
-                              item.record,
-                              availableWidth: constraints.maxWidth,
-                            ),
-                          ),
-                        ),
-                      )
-                    : null,
-              );
-            },
-          );
-        }
-        final isWide = MediaQuery.sizeOf(context).width >= 600;
-        final columns = data.columns
-            .where((column) => isWide || column.showOnMobile)
-            .toList(growable: false);
-        if (columns.isEmpty) {
-          return const Center(child: Text('No display fields configured.'));
-        }
-        if (_usesTableLayout &&
-            isWide &&
-            data.configuration?.blueprint['defaultDisplayMode'] == 'table') {
-          return _recordTable(data, columns);
-        }
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: data.records.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (context, index) => Card(
-            margin: EdgeInsets.zero,
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                children: [
-                  for (final column in columns)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(child: Text(column.label)),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            flex: 2,
-                            child: column.isImage
-                                ? _AdminThumbnail(
-                                    source: data.records[index][column.field],
-                                  )
-                                : Text(
-                                    _displayValue(
-                                        data.records[index], column.field),
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w700),
-                                  ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  if (data.configuration != null)
-                    Align(
-                      alignment: AlignmentDirectional.centerEnd,
-                      child:
-                          _rowActions(data.configuration, data.records[index]),
-                    ),
-                ],
-              ),
+        return Stack(children: [
+          Positioned.fill(child: _recordsView(data)),
+          if (loading)
+            const Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: LinearProgressIndicator(minHeight: 2),
             ),
-          ),
-        );
+        ]);
       },
     );
+    final body = RefreshIndicator(onRefresh: _refresh, child: records);
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.item.name),
-        actions: [
-          if (widget.loadCreateForm != null && widget.createRecord != null)
-            FutureBuilder<AdminModuleData>(
-              future: _data,
-              builder: (context, snapshot) {
-                final configuration = snapshot.data?.configuration;
-                final action = configuration?.createAction;
-                if (configuration == null ||
-                    action == null ||
-                    action['display'] == false ||
-                    action['blueprintApi'] is! String) {
-                  return const SizedBox.shrink();
-                }
-                return Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 12),
-                  child: FilledButton.icon(
-                    onPressed: () => _openCreate(configuration),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.background,
-                      foregroundColor: AppColors.primary,
-                    ),
-                    icon: const Icon(Icons.add),
-                    label: Text(action['displayName']?.toString() ?? 'Create'),
-                  ),
-                );
-              },
-            ),
-          if (_canSearch && (!_hasInlineSearch || _isOffers))
-            IconButton(
-              tooltip: _isOffers ? 'Advanced search' : 'Search',
-              icon: const Icon(Icons.search_rounded),
-              onPressed: _openFilters,
-            ),
-        ],
+        title: _canSearch
+            ? HeaderSearchTitle(
+                title: Text(widget.item.name),
+                controller: _headerSearch,
+                hint: _searchHint,
+              )
+            : Text(widget.item.name),
+        actions: _appBarActions(),
       ),
-      body: _hasInlineSearch
+      floatingActionButton: _createButton(),
+      body: _canSearch
           ? Column(
               children: [
-                FutureBuilder<List<SearchFilterField>?>(
-                  future: _searchFields,
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState != ConnectionState.done) {
-                      return const LinearProgressIndicator();
-                    }
-                    if (snapshot.hasError) {
-                      return TextButton(
-                        onPressed: () {
-                          final fields = widget.loadSearchFields!();
-                          setState(() {
-                            _searchFields = fields;
-                          });
-                        },
-                        child:
-                            const Text('Could not load search options. Retry'),
-                      );
-                    }
-                    final fields = snapshot.data ?? const <SearchFilterField>[];
-                    return _InlineSearchControls(
-                      fields: _isOffers
-                          ? fields.where((field) => field.quickSearch).toList()
-                          : fields,
-                      values: _filters,
-                      onChanged: (field, value, {required debounce}) =>
-                          _updateInlineFilter(field, value, fields,
-                              debounce: debounce),
-                      searchHint: _isCategories
-                          ? 'Search category name…'
-                          : 'Search brand name…',
-                    );
+                BlueprintSearchBar(
+                  key: ValueKey('search-$_refreshCount'),
+                  load: () async =>
+                      await widget.loadSearchFields!() ?? const [],
+                  values: _filters,
+                  searchHint: _searchHint,
+                  onTyping: _narrowInstantly,
+                  headerSearch: _headerSearch,
+                  onChanged: (values) {
+                    _filters = values;
+                    _reloadRecords();
                   },
                 ),
-                Expanded(child: records),
+                Expanded(child: body),
               ],
             )
-          : records,
+          : body,
     );
   }
 
-  void _updateInlineFilter(
-      String field, String value, List<SearchFilterField> fields,
-      {required bool debounce}) {
-    final next = Map<String, String>.of(_filters);
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) {
-      next.remove(field);
-    } else {
-      next[field] = trimmed;
+  Widget _recordsView(AdminModuleData data) {
+    if (data.records.isEmpty) {
+      return _pullable(Center(
+          child: Text(_isOffers ? 'Nothing here yet.' : 'No records found.')));
     }
-    if (next[field] != _filters[field]) {
-      clearDependentFilterValues(next, field, fields);
+    final products = data.products;
+    if (products != null) {
+      return ProductGrid(
+        bottomPadding: _canCreate ? 96 : null,
+        itemCount: products.length,
+        itemBuilder: (context, index) {
+          final item = products[index];
+          final config = data.configuration;
+          final edit = config?.rowActions
+              .where((action) =>
+                  action.isEdit &&
+                  action.blueprintApi != null &&
+                  _canRunAction(action))
+              .firstOrNull;
+          return ProductCard(
+            product: item.product,
+            imageBytes: item.imageBytes,
+            onTap: config != null && edit != null && !_runningAction
+                ? () => _runRowAction(config, item.record, edit)
+                : null,
+            actions: config?.rowActions.isNotEmpty == true
+                ? SizedBox(
+                    width: double.infinity,
+                    child: LayoutBuilder(
+                      builder: (context, constraints) => Align(
+                        alignment: Alignment.centerRight,
+                        child: _rowActions(
+                          config,
+                          item.record,
+                          availableWidth: constraints.maxWidth,
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+          );
+        },
+      );
     }
-    _filters = next;
-    _searchDebounce?.cancel();
-    if (debounce) {
-      _searchDebounce =
-          Timer(const Duration(milliseconds: 250), _reloadRecords);
-    } else {
-      _reloadRecords();
+    final isWide = MediaQuery.sizeOf(context).width >= 600;
+    final columns = data.columns
+        .where((column) => isWide || column.showOnMobile)
+        .toList(growable: false);
+    if (columns.isEmpty) {
+      return const Center(child: Text('No display fields configured.'));
     }
+    if (_usesTableLayout &&
+        isWide &&
+        data.configuration?.blueprint['defaultDisplayMode'] == 'table') {
+      return _recordTable(data, columns);
+    }
+    return RecordCardList(
+      columns: columns,
+      records: data.records,
+      cell: _cell,
+      textOf: (record, column) => _displayValue(record, column.field),
+      actions: (record) => _rowActions(data.configuration, record),
+    );
   }
 
-  Future<AdminModuleData> _loadRecords() =>
-      widget.loadFiltered?.call(_filters) ?? widget.load();
+  List<Widget> _appBarActions() => [
+        if (_canSearch) HeaderSearchButton(controller: _headerSearch),
+      ];
+
+  bool get _canCreate =>
+      widget.loadCreateForm != null && widget.createRecord != null;
+
+  /// Compact floating "+ Create …" button (bottom right) for the page's
+  /// create action, once its blueprint says there is one.
+  Widget? _createButton() => !_canCreate
+      ? null
+      : FutureBuilder<AdminModuleData>(
+          future: _data,
+          builder: (context, snapshot) {
+            final configuration = snapshot.data?.configuration;
+            final action = configuration?.createAction;
+            if (configuration == null ||
+                action == null ||
+                action['display'] == false ||
+                action['blueprintApi'] is! String) {
+              return const SizedBox.shrink();
+            }
+            // The icon already shows "+", so drop one from the label.
+            final label = (action['displayName']?.toString() ?? 'Create')
+                .replaceFirst(RegExp(r'^\s*\+\s*'), '');
+            return FloatingActionButton.extended(
+              heroTag: null,
+              onPressed: () => _openCreate(configuration),
+              backgroundColor: AppColors.primary,
+              foregroundColor: AppColors.onPrimary,
+              elevation: 3,
+              extendedPadding: const EdgeInsets.symmetric(horizontal: 16),
+              extendedIconLabelSpacing: 6,
+              extendedTextStyle: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+              ),
+              icon: const Icon(Icons.add_rounded, size: 20),
+              label: Text(label),
+            );
+          },
+        );
+
+  Future<AdminModuleData> _loadRecords() => _remember(
+        widget.loadPage?.call(_filters, _configuration) ??
+            widget.loadFiltered?.call(_filters) ??
+            widget.load(),
+      );
 
   Future<void> _openCreate(AdminModuleConfiguration configuration) =>
       _openEditor(
@@ -350,7 +368,6 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
       ),
     );
     if (!mounted || saved != true) return;
-    _searchDebounce?.cancel();
     _reloadRecords();
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Record saved')),
@@ -359,43 +376,25 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
 
   Widget _recordTable(AdminModuleData data, List<AdminModuleColumn> columns) {
     final count = data.configuration?.rowActions.length ?? 0;
-    final actionWidth = count > 3 ? 48.0 : count * 48.0;
-    return ListView.separated(
-      padding: const EdgeInsets.all(16),
-      itemCount: data.records.length + 1,
-      separatorBuilder: (_, __) => const Divider(height: 1),
-      itemBuilder: (context, index) {
-        final record = index == 0 ? null : data.records[index - 1];
-        return Container(
-          color: index.isEven ? AppColors.primarySoft : null,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          child: Row(children: [
-            for (final column in columns)
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsetsDirectional.only(end: 12),
-                  child: Text(
-                    record == null
-                        ? column.label.toUpperCase()
-                        : _displayValue(record, column.field),
-                    style: TextStyle(
-                      fontWeight:
-                          record == null ? FontWeight.w800 : FontWeight.w500,
-                    ),
-                  ),
-                ),
-              ),
-            SizedBox(
-              width: actionWidth,
-              child: record == null
-                  ? null
-                  : _rowActions(data.configuration, record),
-            ),
-          ]),
-        );
-      },
+    return RecordTableView(
+      columns: columns,
+      records: data.records,
+      cell: _cell,
+      textOf: (record, column) => _displayValue(record, column.field),
+      actions: (record) => _rowActions(data.configuration, record),
+      actionsWidth: count > 3 ? 48.0 : count * 44.0,
     );
   }
+
+  /// One field of a record: a thumbnail for image columns, else its text.
+  Widget _cell(Map<String, dynamic> record, AdminModuleColumn column) =>
+      column.isImage
+          ? _AdminThumbnail(source: record[column.field])
+          : Text(
+              _displayValue(record, column.field),
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            );
 
   Widget _rowActions(
     AdminModuleConfiguration? config,
@@ -427,14 +426,25 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
           tooltip: _canRunAction(action)
               ? action.label
               : '${action.label} unavailable',
+          iconSize: 20,
+          visualDensity: VisualDensity.compact,
+          style: IconButton.styleFrom(
+            backgroundColor: action.isDelete
+                ? const Color(0xFFFDECEA)
+                : AppColors.primaryTint,
+            foregroundColor:
+                action.isDelete ? const Color(0xFFC0392B) : AppColors.primary,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
           icon: Icon(
             action.isDelete
-                ? Icons.delete_outline
+                ? Icons.delete_outline_rounded
                 : action.isView
                     ? Icons.visibility_outlined
                     : action.isEdit || action.blueprintApi != null
-                        ? Icons.edit_outlined
-                        : Icons.play_arrow_outlined,
+                        ? Icons.edit_rounded
+                        : Icons.play_arrow_rounded,
           ),
           onPressed: _runningAction || !_canRunAction(action)
               ? null
@@ -571,22 +581,6 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
     });
   }
 
-  Future<void> _openFilters() async {
-    final values = await showModalBottomSheet<Map<String, String>>(
-      context: context,
-      isScrollControlled: true,
-      builder: (_) => SearchFilterPanel(
-        load: () async => await widget.loadSearchFields!() ?? const [],
-        initialValues: _filters,
-      ),
-    );
-    if (!mounted || values == null) return;
-    setState(() {
-      _filters = values;
-      _data = _loadRecords();
-    });
-  }
-
   String _displayValue(Map<String, dynamic> record, String field) {
     Object? value = record[field];
     if (!record.containsKey(field)) {
@@ -596,95 +590,6 @@ class _AdminModuleScreenState extends State<AdminModuleScreen> {
       }
     }
     return value?.toString() ?? '—';
-  }
-}
-
-class _InlineSearchControls extends StatelessWidget {
-  const _InlineSearchControls({
-    required this.fields,
-    required this.values,
-    required this.onChanged,
-    required this.searchHint,
-  });
-
-  final List<SearchFilterField> fields;
-  final Map<String, String> values;
-  final String searchHint;
-  final void Function(String field, String value, {required bool debounce})
-      onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (fields.isEmpty) return const SizedBox.shrink();
-    final ordered = [
-      ...fields.where((field) => field.options != null),
-      ...fields.where((field) => field.options == null),
-    ];
-    final columns = ordered.length.clamp(1, 3);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: LayoutBuilder(builder: (context, constraints) {
-        final width = constraints.maxWidth;
-        const spacing = 12.0;
-        final wide = width >= 680;
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: [
-            for (final field in ordered)
-              SizedBox(
-                width: wide
-                    ? (width - (columns - 1) * spacing) / columns
-                    : field.options != null && width >= 300
-                        ? (width - spacing) / 2
-                        : width,
-                child: _control(field),
-              ),
-          ],
-        );
-      }),
-    );
-  }
-
-  Widget _control(SearchFilterField field) {
-    final options = field.options;
-    if (options == null) {
-      return TextFormField(
-        key: ValueKey(field.field),
-        initialValue: values[field.field],
-        textInputAction: TextInputAction.search,
-        decoration: InputDecoration(
-          hintText: field.placeholder?.trim().isNotEmpty == true
-              ? field.placeholder
-              : searchHint,
-          prefixIcon: const Icon(Icons.search_rounded),
-          border: const OutlineInputBorder(),
-        ),
-        onChanged: (value) => onChanged(field.field, value, debounce: true),
-        onFieldSubmitted: (value) =>
-            onChanged(field.field, value, debounce: false),
-      );
-    }
-    return DropdownButtonFormField<String>(
-      key: ValueKey(field.field),
-      isExpanded: true,
-      initialValue:
-          options.containsKey(values[field.field]) ? values[field.field] : '',
-      decoration: InputDecoration(
-        labelText: field.label,
-        border: const OutlineInputBorder(),
-      ),
-      items: [
-        const DropdownMenuItem(value: '', child: Text('All')),
-        for (final option in options.entries)
-          DropdownMenuItem(
-            value: option.key,
-            child: Text(option.value, overflow: TextOverflow.ellipsis),
-          ),
-      ],
-      onChanged: (value) =>
-          onChanged(field.field, value ?? '', debounce: false),
-    );
   }
 }
 
@@ -711,6 +616,7 @@ class _AdminThumbnail extends StatelessWidget {
     if (image is Uint8List) {
       return Image.memory(
         image,
+        cacheWidth: 216,
         fit: BoxFit.contain,
         semanticLabel: 'Product image',
         errorBuilder: (_, __, ___) => placeholder,
@@ -732,9 +638,36 @@ class _AdminThumbnail extends StatelessWidget {
     if (url == null) return placeholder;
     return Image.network(
       url,
+      cacheWidth: 216,
       fit: BoxFit.contain,
       semanticLabel: 'Product image',
       errorBuilder: (_, __, ___) => placeholder,
     );
   }
+}
+
+/// Records (and product cards) whose text contains [text], case-insensitive.
+AdminModuleData narrowAdminData(AdminModuleData data, String text) {
+  final q = text.trim().toLowerCase();
+  if (q.isEmpty) return data;
+  bool matches(Map record) => record.values
+      .any((value) => value is String && value.toLowerCase().contains(q));
+  final products = data.products;
+  if (products != null) {
+    final kept = products
+        .where((p) =>
+            p.product.name.toLowerCase().contains(q) || matches(p.record))
+        .toList(growable: false);
+    return AdminModuleData(
+      columns: data.columns,
+      records: [for (final p in kept) p.record],
+      configuration: data.configuration,
+      products: kept,
+    );
+  }
+  return AdminModuleData(
+    columns: data.columns,
+    records: data.records.where(matches).toList(growable: false),
+    configuration: data.configuration,
+  );
 }

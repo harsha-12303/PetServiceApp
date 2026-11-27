@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../core/theme/app_theme.dart';
+import '../data/datasources/saved_credentials_store.dart';
 import '../data/datasources/session_local_data_source.dart';
 import '../domain/entities/models.dart';
 import '../domain/repositories/admin_module_repository.dart';
@@ -22,7 +23,10 @@ class PetCareApp extends StatelessWidget {
     this.initialSession,
     this.sessionCache,
     this.adminModuleRepository,
+    this.credentialsStore,
   });
+
+  final CredentialsStore? credentialsStore;
 
   final AuthRepository authRepository;
   final CatalogRepository catalogRepository;
@@ -41,6 +45,7 @@ class PetCareApp extends StatelessWidget {
           adminModuleRepository: adminModuleRepository,
           sessionCache: sessionCache,
           loginScreenBuilder: buildLoginScreen,
+          credentialsStore: credentialsStore,
         );
     return MaterialApp(
       title: 'PetCareServices',

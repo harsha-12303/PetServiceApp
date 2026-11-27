@@ -81,14 +81,25 @@ class _SearchFilterPanelState extends State<SearchFilterPanel> {
                         _buildField(field, fields),
                         const SizedBox(height: 12),
                       ],
-                      FilledButton(
-                        onPressed: () => Navigator.of(context).pop({
-                          for (final field in visible)
-                            if (_selectedValue(field) case final value?)
-                              field.field: value,
-                        }),
-                        child: const Text('Apply filters'),
-                      ),
+                      Row(children: [
+                        if (fields.isNotEmpty)
+                          TextButton(
+                            onPressed: () => Navigator.of(context)
+                                .pop(const <String, String>{}),
+                            child: const Text('Clear'),
+                          ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () => Navigator.of(context).pop({
+                              for (final field in visible)
+                                if (_selectedValue(field) case final value?)
+                                  field.field: value,
+                            }),
+                            child: const Text('Apply filters'),
+                          ),
+                        ),
+                      ]),
                     ],
                   );
                 },

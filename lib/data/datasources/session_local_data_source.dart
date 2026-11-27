@@ -55,6 +55,7 @@ class SessionLocalDataSource {
   static Map<String, Object?> _menuToJson(MenuItem item) => {
         'code': item.code,
         'name': item.name,
+        'icon': item.icon,
         'dataTableBlueprintUrl': item.dataTableBlueprintUrl,
         'dataApi': item.dataApi,
         'searchBlueprintUrl': item.searchBlueprintUrl,
@@ -66,6 +67,7 @@ class SessionLocalDataSource {
   static MenuItem _menuFromJson(Map value) => MenuItem(
         code: value['code']?.toString() ?? '',
         name: value['name']?.toString() ?? '',
+        icon: value['icon']?.toString(),
         dataTableBlueprintUrl: value['dataTableBlueprintUrl']?.toString(),
         dataApi: value['dataApi']?.toString(),
         searchBlueprintUrl: value['searchBlueprintUrl']?.toString(),

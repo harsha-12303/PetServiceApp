@@ -386,11 +386,16 @@ void main() {
               }
             ],
           };
-        case 'POST /products/platform/v1/api/products/SKU-42':
-          final payload = jsonDecode(request.body) as Map;
-          productName = payload['productName'] as String;
-          expect(payload['lifeStage'], 'Puppy');
-          expect(payload['variants'], [
+        case 'PATCH /products/platform/v1/api/products/SKU-42':
+          // Product edits are multipart PATCH (the form has image fields).
+          expect(request.headers['content-type'],
+              startsWith('multipart/form-data'));
+          final parts = _multipartFields(request);
+          productName = parts['productName']!.single;
+          expect(parts['lifeStage'], ['Puppy']);
+          expect(parts.containsKey('removeImages'), isFalse,
+              reason: 'the kept image must not be removed');
+          expect(jsonDecode(parts['variants']!.single), [
             {
               'variantId': 'VAR-41',
               'unitSize': '100',
@@ -478,7 +483,7 @@ void main() {
         containsAllInOrder([
           'GET /management-detail/VAR-42',
           'GET /products/platform/v1/api/products/SKU-42',
-          'POST /products/platform/v1/api/products/SKU-42',
+          'PATCH /products/platform/v1/api/products/SKU-42',
           'DELETE /management-products/SKU-42',
         ]));
   });
@@ -618,6 +623,7 @@ void main() {
               'field': field,
               'displayName': label,
               'fieldType': editing ? 'radioButton' : 'dropDown',
+              'quickSearchFilter': true,
               'values': [
                 for (final choice in choices) {'radioValue': choice}
               ],
@@ -736,7 +742,7 @@ void main() {
     await select(find.byKey(const ValueKey('productType')), 'Food');
     await select(find.byKey(const ValueKey('petType')), 'Cat');
     expect(optionRequests, isEmpty);
-    await tester.tap(find.byTooltip('Advanced search'));
+    await tester.tap(find.byTooltip('Filters'));
     await tester.pumpAndSettle();
     expect(optionRequests, ['/options/brands:Cat', '/options/categories:Cat']);
     await select(
@@ -745,7 +751,7 @@ void main() {
             of: find.byType(SearchFilterPanel),
             matching: find.byType(DropdownButtonFormField<String>),
           )
-          .at(2),
+          .first,
       'Cat-brand',
     );
     await tester.tap(find.text('Apply filters'));
@@ -829,11 +835,16 @@ void main() {
                 'field': 'petType',
                 'displayName': 'Pet Type',
                 'fieldType': 'dropDown',
+                'quickSearchFilter': true,
                 'staticDropDownValues': [
                   {'petType': 'Reptile'},
                 ],
               },
-              {'field': 'categoryName', 'displayName': 'Category Name'},
+              {
+                'field': 'categoryName',
+                'displayName': 'Category Name',
+                'quickSearchFilter': true,
+              },
             ],
           };
         case '/category-form':
@@ -920,8 +931,10 @@ void main() {
     expect(find.text('CATEGORY CODE'), findsOneWidget);
     expect(find.text('42'), findsNothing);
 
-    await tester.enterText(find.byKey(const ValueKey('categoryName')), 'food');
-    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byKey(const ValueKey('header-search')), 'food');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(requests.last.url.queryParameters['categoryName'], 'food');
 
@@ -1157,8 +1170,9 @@ void main() {
     await tester.pumpAndSettle();
     final productType = find.byKey(const ValueKey('productType'));
     final petType = find.byKey(const ValueKey('petType'));
-    final search = find.byKey(const ValueKey('q'));
-    expect(tester.getTopLeft(productType).dy, tester.getTopLeft(search).dy);
+    // Name search lives in the header (🔍), not on the page.
+    expect(find.byKey(const ValueKey('q')), findsNothing);
+    expect(tester.getTopLeft(productType).dy, tester.getTopLeft(petType).dy);
     expect(tester.getTopLeft(petType).dx,
         greaterThan(tester.getTopLeft(productType).dx));
     await tester.tap(productType);
@@ -1169,15 +1183,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Dog').last);
     await tester.pumpAndSettle();
-    await tester.enterText(search, 'royal');
+    await tester.tap(find.byTooltip('Search'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+        find.byKey(const ValueKey('header-search')), 'royal');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(
         queries.last, {'productType': 'FOOD', 'petType': 'DOG', 'q': 'royal'});
 
-    await tester.binding.setSurfaceSize(const Size(390, 650));
+    // Closing the header search clears the name filter.
+    await tester.tap(find.byTooltip('Close search'));
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
-    expect(tester.getTopLeft(search).dy,
-        greaterThan(tester.getTopLeft(productType).dy));
+    expect(queries.last, {'productType': 'FOOD', 'petType': 'DOG'});
   });
 
   test('Create Order uses endpoints discovered in its module blueprints',
@@ -1350,7 +1369,11 @@ void main() {
     expect(find.text('500g'), findsNothing);
     final images = tester
         .widgetList<Image>(find.byType(Image))
-        .map((image) => image.image);
+        // Cards decode at display size, so providers are wrapped in ResizeImage.
+        .map((image) => switch (image.image) {
+              ResizeImage(:final imageProvider) => imageProvider,
+              final provider => provider,
+            });
     expect(images.whereType<MemoryImage>(), hasLength(1));
     final directImage = images.whereType<NetworkImage>().single;
     expect(directImage.url, cloudUrl);
@@ -1402,7 +1425,9 @@ void main() {
             'records': [
               {
                 'code': 'category-$optionsRequests',
-                'name': optionsRequests == 1 ? 'Dry food' : 'Wet food',
+                // Options are fetched with the page and again on every
+                // Filters-box open, so each fetch returns a new name.
+                'name': 'Food v$optionsRequests',
               },
             ],
           }),
@@ -1433,19 +1458,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(dropdown);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Dry food').last);
+    final picked = optionsRequests;
+    await tester.tap(find.text('Food v$picked').last);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Apply filters'));
     await tester.pumpAndSettle();
-    expect(catalog.lastProductQuery['categoryCode'], 'category-1');
+    expect(catalog.lastProductQuery['categoryCode'], 'category-$picked');
 
     await tester.tap(filters);
     await tester.pumpAndSettle();
     await tester.tap(dropdown);
     await tester.pumpAndSettle();
-    expect(optionsRequests, 2);
-    expect(find.text('Wet food'), findsWidgets);
-    expect(find.text('Dry food'), findsNothing);
+    expect(optionsRequests, picked + 1, reason: 'reopening refetches options');
+    expect(find.text('Food v${picked + 1}'), findsWidgets);
+    expect(find.text('Food v$picked'), findsNothing);
   });
 
   testWidgets('admin submenu restores a cached data link and shows records',
@@ -1532,20 +1558,23 @@ void main() {
     await tester.tap(find.text('Order Management'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Order number'), findsOneWidget);
+    expect(find.text('ORDER NUMBER'), findsOneWidget);
     expect(find.text('ORDER-123'), findsOneWidget);
     expect(find.text('hidden-value'), findsNothing);
-    expect(paths, [
-      '/users/api/menulinks',
-      '/products/api/blueprint/orders',
-      '/orders/platform/v1/api/orders',
-    ]);
-    expect(find.byIcon(Icons.tune_rounded), findsNothing);
-    expect(find.byIcon(Icons.search_rounded), findsOneWidget);
+    expect(paths.first, '/users/api/menulinks');
+    expect(
+        paths,
+        containsAll([
+          '/products/api/blueprint/orders',
+          '/products/api/blueprint/ordersSearch',
+          '/orders/platform/v1/api/orders',
+        ]));
+    // The name search (`q`) is shown on the page even without
+    // quickSearchFilter, so every list page has search-by-name.
     await tester.tap(find.byTooltip('Search'));
     await tester.pumpAndSettle();
-    await tester.enterText(find.byType(TextFormField), '456');
-    await tester.tap(find.text('Apply filters'));
+    await tester.enterText(find.byKey(const ValueKey('header-search')), '456');
+    await tester.pump(const Duration(milliseconds: 300));
     await tester.pumpAndSettle();
     expect(find.text('FILTERED-456'), findsOneWidget);
     expect(paths.last, '/orders/platform/v1/api/search');
@@ -1571,6 +1600,7 @@ void main() {
     await tester.tap(find.byTooltip('Search products'));
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 't');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(find.text('Treats'), findsOneWidget);
     expect(find.text('Kibble'), findsNothing);
@@ -1601,16 +1631,19 @@ void main() {
     await tester.pumpAndSettle();
     final search = find.byType(TextField);
     await tester.enterText(search, 'k');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(find.text('Kibble'), findsOneWidget);
     expect(find.text('Treats'), findsNothing);
 
     await tester.enterText(search, 'tr');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(find.text('Treats'), findsOneWidget);
     expect(find.text('Kibble'), findsNothing);
 
     await tester.enterText(search, '');
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
     expect(find.text('Kibble'), findsOneWidget);
     expect(find.text('Treats'), findsOneWidget);
@@ -1702,7 +1735,14 @@ void main() {
     await tester.drag(details, const Offset(0, -180));
     await tester.pumpAndSettle();
     expect(tester.getTopLeft(gallery), galleryPosition);
-    expect(tester.getTopLeft(title).dy, lessThan(titlePosition.dy));
+    // The details panel scrolled while the gallery stayed put.
+    expect(
+        tester
+            .state<ScrollableState>(
+                find.descendant(of: details, matching: find.byType(Scrollable)))
+            .position
+            .pixels,
+        greaterThan(0));
     final description = find.textContaining('Product description line.');
     expect(tester.widget<Text>(description).maxLines, 5);
     expect(find.text('More'), findsOneWidget);
@@ -2167,4 +2207,24 @@ class _FailingCartQuantityStore implements CartQuantityStore {
   @override
   Future<void> saveQuantity(String variantId, int quantity) =>
       Future.error(Exception('Local storage is unavailable.'));
+}
+
+/// Text parts of a multipart request body, by part name.
+Map<String, List<String>> _multipartFields(http.Request request) {
+  final boundary = RegExp(r'boundary=(.+)$')
+      .firstMatch(request.headers['content-type'] ?? '')!
+      .group(1)!;
+  final out = <String, List<String>>{};
+  for (final part in utf8.decode(request.bodyBytes).split('--$boundary')) {
+    final split = part.indexOf('\r\n\r\n');
+    if (split < 0) continue;
+    final headers = part.substring(0, split);
+    if (headers.contains('filename=')) continue;
+    final name = RegExp(r'name="([^"]+)"').firstMatch(headers)?.group(1);
+    if (name == null) continue;
+    var value = part.substring(split + 4);
+    if (value.endsWith('\r\n')) value = value.substring(0, value.length - 2);
+    out.putIfAbsent(name, () => []).add(value);
+  }
+  return out;
 }

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/constants/app_colors.dart';
 import '../../../domain/entities/models.dart';
 import '../../../domain/repositories/admin_module_repository.dart';
 import '../../../domain/repositories/catalog_repository.dart';
 import '../../../domain/repositories/cart_quantity_store.dart';
 import '../../orders/views/create_order_screen.dart';
 import 'admin_module_screen.dart';
+import 'app_drawer.dart';
 
 class PetWorkHomeScreen extends StatelessWidget {
   const PetWorkHomeScreen(
@@ -35,81 +35,14 @@ class PetWorkHomeScreen extends StatelessWidget {
                   icon: const Icon(Icons.menu_rounded),
                   onPressed: () => Scaffold.of(context).openDrawer())),
         ),
-        drawer: Drawer(
-          child: SafeArea(
-            child: Column(children: [
-              Expanded(
-                child: ListView(children: [
-                  Container(
-                      padding: const EdgeInsets.all(24),
-                      color: AppColors.primaryTint,
-                      child: const Row(children: [
-                        Icon(Icons.pets_outlined, color: AppColors.primary),
-                        SizedBox(width: 12),
-                        Text('PetWork',
-                            style: TextStyle(
-                                fontSize: 22, fontWeight: FontWeight.w800)),
-                      ])),
-                  const Padding(
-                      padding: EdgeInsets.fromLTRB(24, 18, 24, 8),
-                      child: Text('NAVIGATION',
-                          style: TextStyle(
-                              color: AppColors.placeholder,
-                              fontWeight: FontWeight.w800,
-                              fontSize: 12))),
-                  for (final item in session.menuItems)
-                    _MenuTile(
-                        item: item,
-                        onSelected: (selected) => _openMenu(
-                              context,
-                              selected,
-                              parentCode:
-                                  identical(item, selected) ? null : item.code,
-                            )),
-                ]),
-              ),
-              const Divider(height: 1, color: AppColors.border),
-              ListTile(
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                leading: const Icon(Icons.logout_rounded),
-                title: const Text('Logout',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
-                onTap: () => _logout(context),
-              ),
-            ]),
-          ),
+        drawer: AppDrawer(
+          menuItems: session.menuItems,
+          onSelected: (selected, parent) =>
+              _openMenu(context, selected, parentCode: parent?.code),
+          onLogout: () => _logout(context),
         ),
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Card(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 32, vertical: 28),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryTint,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: const Icon(Icons.pets_outlined,
-                          color: AppColors.primary),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text('Welcome to PetWork',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                            fontSize: 24, fontWeight: FontWeight.w800)),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ),
+        // Plain, empty dashboard: navigation lives in the drawer.
+        body: const SizedBox.expand(),
       );
 
   void _openMenu(BuildContext context, MenuItem item, {String? parentCode}) {
@@ -140,6 +73,8 @@ class PetWorkHomeScreen extends StatelessWidget {
                       session.tokens.bearerToken,
                       item,
                       parentCode: parentCode,
+                      // Keep the name search (`q`) so it shows on the page.
+                      includeQuickSearch: true,
                     ),
           );
       navigator.push(MaterialPageRoute(
@@ -183,6 +118,13 @@ class PetWorkHomeScreen extends StatelessWidget {
             item,
             parentCode: parentCode,
             filters: filters,
+          ),
+          loadPage: (filters, configuration) => repository.load(
+            session.tokens.bearerToken,
+            item,
+            parentCode: parentCode,
+            filters: filters,
+            configuration: configuration,
           ),
           loadSearchFields: () => repository.loadSearchFilters(
             session.tokens.bearerToken,
@@ -231,38 +173,5 @@ class PetWorkHomeScreen extends StatelessWidget {
       return;
     }
     Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
-  }
-}
-
-class _MenuTile extends StatelessWidget {
-  const _MenuTile({required this.item, required this.onSelected});
-  final MenuItem item;
-  final ValueChanged<MenuItem> onSelected;
-
-  void _select(BuildContext context, MenuItem selected) {
-    Scaffold.of(context).closeDrawer();
-    onSelected(selected);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    if (item.children.isEmpty) {
-      return ListTile(
-          title: Text(item.name),
-          leading: const Icon(Icons.grid_view_rounded),
-          onTap: () => _select(context, item));
-    }
-    return ExpansionTile(
-      title: Text(item.name),
-      leading: const Icon(Icons.folder_outlined),
-      children: [
-        for (final child in item.children)
-          ListTile(
-            title: Text(child.name),
-            contentPadding: const EdgeInsets.only(left: 72, right: 24),
-            onTap: () => _select(context, child),
-          )
-      ],
-    );
   }
 }

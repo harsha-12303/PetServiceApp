@@ -21,6 +21,14 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
   final Future<List<MenuItem>> Function(String bearerToken) _getMenuItems;
   final http.Client _client;
 
+  /// Search URL read from a page's search blueprint, kept only while that
+  /// page is open (cleared whenever its configuration is loaded afresh), so
+  /// each search costs one request instead of two.
+  final _searchApiByPage = <String, String?>{};
+
+  String _pageKey(MenuItem item) =>
+      '${item.code}|${item.searchBlueprintUrl ?? ''}';
+
   @override
   Future<AdminModuleConfiguration> loadConfiguration(
     String bearerToken,
@@ -28,6 +36,9 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
     String? parentCode,
     bool includeSearchEndpoint = false,
   }) async {
+    // A fresh configuration (page opened or refreshed) also forgets the
+    // page's remembered search URL.
+    _searchApiByPage.remove(_pageKey(item));
     if (!item.isProductManagement &&
         _link(item.dataTableBlueprintUrl) == null &&
         _link(item.dataApi) == null) {
@@ -91,8 +102,9 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
     MenuItem item, {
     String? parentCode,
     Map<String, String> filters = const {},
+    AdminModuleConfiguration? configuration,
   }) async {
-    final config =
+    final config = configuration ??
         await loadConfiguration(bearerToken, item, parentCode: parentCode);
     item = config.item;
     final isProductManagement = item.isProductManagement;
@@ -217,11 +229,14 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
     Map<String, String> filters,
     String? parentCode,
   ) async {
+    final key = _pageKey(config.item);
     final dataApi = filters.isEmpty
         ? config.dataApi
         : config.searchApi ??
-            _link((await _readSearchBlueprint(
-                bearerToken, config.item, parentCode))?['searchApi']) ??
+            (_searchApiByPage.containsKey(key)
+                ? _searchApiByPage[key]
+                : _searchApiByPage[key] = _link((await _readSearchBlueprint(
+                    bearerToken, config.item, parentCode))?['searchApi'])) ??
             config.dataApi;
     if (dataApi == null) {
       throw const AppException('This menu has no data endpoint configured.');
@@ -431,7 +446,11 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
       loadOptions: isDropdown && isConditional ? readOptions : null,
       dependencies: dependencies,
       visibilityCriteria: criteria,
-      quickSearch: entry['quickSearchFilter'] != false,
+      // Only `quickSearchFilter: true` is inline; everything else (including
+      // fields the backend adds later) goes in the Filters box.
+      quickSearch: entry['quickSearchFilter'] == true ||
+          entry['quickSearchFilter']?.toString().toLowerCase() == 'true',
+      minLength: int.tryParse('${_formRules(entry)['minSize'] ?? ''}') ?? 1,
     );
   }
 
@@ -581,19 +600,20 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
     return ModuleRecordForm(
       fields: inputs,
       groups: groups,
-      multipart: record == null && configuration.item.isProductManagement,
+      // Product forms have image fields, so create AND edit go as multipart.
+      multipart: !readOnly && configuration.item.isProductManagement,
       showResetButton: blueprint['resetButton'] == true,
       readOnly: readOnly,
-      method:
-          !isEditing || (editAction && configuration.item.isProductManagement)
-              ? 'POST'
-              : editAction
-                  ? 'PATCH'
-                  : hasWriteMethod
-                      ? writeMethod!
-                      : (rowCreateApi != null && updateApi == null
-                          ? 'POST'
-                          : 'PUT'),
+      // Updates are PATCH (the record URL rejects POST with 405).
+      method: !isEditing
+          ? 'POST'
+          : editAction
+              ? 'PATCH'
+              : hasWriteMethod
+                  ? writeMethod!
+                  : (rowCreateApi != null && updateApi == null
+                      ? 'POST'
+                      : 'PUT'),
       createApi: saveApi,
       resolveCreateApi: createTemplate != null
           ? (values) => configuration.recordEndpoint(
@@ -730,11 +750,14 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
     ModuleRecordForm form,
     Map<String, Object?> values,
   ) {
-    final request = http.MultipartRequest('POST', uri)
+    // POST on create, PATCH on edit.
+    final request = http.MultipartRequest(form.method, uri)
       ..followRedirects = false
       ..headers['Accept'] = 'application/json'
       ..headers['Authorization'] = 'Bearer $bearerToken';
     final groups = {for (final group in form.groups) group.input.field: group};
+    final keptUrls = <String>{};
+    final removeImages = <String>[];
     for (final entry in values.entries) {
       final rows = entry.value;
       final group = groups[entry.key];
@@ -742,17 +765,25 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
         if (rows != null) request.fields[entry.key] = rows.toString();
         continue;
       }
-      final fileFields = group.fields
-          .where((field) => field.fieldType == 'fileupload')
-          .map((field) => field.input.field)
-          .toSet();
+      final fileFields = {
+        for (final field in group.fields)
+          if (field.fieldType == 'fileupload') field.input.field: field,
+      };
       final metadata = <Map<String, Object?>>[];
       for (final (index, row) in rows.indexed) {
         metadata.add({
           for (final field in row.entries)
-            if (!fileFields.contains(field.key)) field.key: field.value,
+            if (!fileFields.containsKey(field.key)) field.key: field.value,
+          // Server images still kept: a URL for single fields, a list for
+          // multiple ones. Newly picked files go as parts below instead.
+          for (final MapEntry(key: name, value: field) in fileFields.entries)
+            if (_imageUrls(row[name]) case final urls?)
+              name: field.multipleFiles ? urls : urls.firstOrNull,
         });
-        for (final field in fileFields) {
+        for (final name in fileFields.keys) {
+          keptUrls.addAll(_imageUrls(row[name]) ?? const []);
+        }
+        for (final field in fileFields.keys) {
           final files = row[field];
           if (files is! List<ModuleFormFile>) continue;
           for (final file in files) {
@@ -766,6 +797,17 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
         }
       }
       request.fields[entry.key] = jsonEncode(metadata);
+      // Images the product had when the form opened but no longer keeps.
+      for (final initial in group.initialRows) {
+        for (final name in fileFields.keys) {
+          removeImages.addAll(_imageUrls(initial[name]) ?? const []);
+        }
+      }
+    }
+    removeImages.removeWhere(keptUrls.contains);
+    // One `removeImages` part per URL (http's `fields` map can't repeat keys).
+    for (final url in removeImages.toSet()) {
+      request.files.add(http.MultipartFile.fromString('removeImages', url));
     }
     return _client
         .send(request)
@@ -1042,4 +1084,21 @@ class AdminModuleRepositoryImpl implements AdminModuleRepository {
       throw const AppException('The server returned invalid menu data.');
     }
   }
+}
+
+/// Server image URLs held by a file field: a URL string or a list of them.
+/// Null when the field holds newly picked files (or nothing usable).
+List<String>? _imageUrls(Object? value) {
+  if (value is List<ModuleFormFile>) return null;
+  if (value is String) return value.trim().isEmpty ? const [] : [value.trim()];
+  if (value is List) {
+    return [
+      for (final item in value)
+        if (item is String && item.trim().isNotEmpty)
+          item.trim()
+        else if (item is Map && item['url'] is String)
+          item['url'] as String,
+    ];
+  }
+  return null;
 }

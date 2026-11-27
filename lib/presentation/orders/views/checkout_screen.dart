@@ -623,6 +623,7 @@ class _ProductImage extends StatelessWidget {
       child: Image.network(url!,
           height: 50,
           width: 40,
+          cacheWidth: 150,
           fit: BoxFit.cover,
           errorBuilder: (_, __, ___) => placeholder),
     );

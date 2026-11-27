@@ -48,6 +48,8 @@ class AuthRepositoryImpl implements AuthRepository {
           record[isSubmenu ? 'subMenuCode' : 'mainMenuCode']?.toString() ?? '',
       name: record[isSubmenu ? 'subMenuName' : 'mainMenuName']?.toString() ??
           'Menu',
+      icon: (record['icon'] ?? record['iconName'] ?? record['menuIcon'])
+          ?.toString(),
       children: children,
       dataTableBlueprintUrl:
           (record['dataTableBluePrintUrl'] ?? record['dataTableBlueprintUrl'])
