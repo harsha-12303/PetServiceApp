@@ -11,8 +11,11 @@ class ProductGrid extends StatelessWidget {
     super.key,
     required this.itemCount,
     required this.itemBuilder,
+    this.bottomPadding,
   });
 
+  /// Extra space below the last row (e.g. room for a floating button).
+  final double? bottomPadding;
   final int itemCount;
   final IndexedWidgetBuilder itemBuilder;
 
@@ -25,7 +28,13 @@ class ProductGrid extends StatelessWidget {
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 1200),
               child: GridView.builder(
-                padding: EdgeInsets.all(isTablet ? 24 : 16),
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: EdgeInsets.fromLTRB(
+                  isTablet ? 24 : 16,
+                  isTablet ? 24 : 16,
+                  isTablet ? 24 : 16,
+                  bottomPadding ?? (isTablet ? 24 : 16),
+                ),
                 itemCount: itemCount,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: width >= 1100 ? 4 : (isTablet ? 3 : 2),
@@ -84,7 +93,8 @@ class ProductCard extends StatelessWidget {
                 child: SizedBox(
                   height: 180,
                   child: Center(
-                    child: FittedBox(fit: BoxFit.scaleDown, child: _image()),
+                    child: FittedBox(
+                        fit: BoxFit.scaleDown, child: _image(context)),
                   ),
                 ),
               ),
@@ -137,8 +147,9 @@ class ProductCard extends StatelessWidget {
     );
   }
 
-  Widget _image() {
+  Widget _image(BuildContext context) {
     const size = 175.0;
+    final decodeSize = (size * MediaQuery.devicePixelRatioOf(context)).round();
     final placeholder = Container(
       height: size,
       width: size,
@@ -163,8 +174,10 @@ class ProductCard extends StatelessWidget {
     return ClipRRect(
       borderRadius: BorderRadius.circular(10),
       child: Image(
-        image: provider,
+        image: ResizeImage.resizeIfNeeded(decodeSize, null, provider),
         width: size,
+        gaplessPlayback: true,
+        filterQuality: FilterQuality.medium,
         height: size,
         fit: BoxFit.contain,
         semanticLabel: 'Product image',

@@ -26,10 +26,14 @@ class MenuItem {
       this.searchBlueprintUrl,
       this.searchApi,
       this.createApi,
-      this.dataApi});
+      this.dataApi,
+      this.icon});
 
   final String code;
   final String name;
+
+  /// Icon name from the backend menu (usually Font Awesome, e.g. `fa-box`).
+  final String? icon;
   final List<MenuItem> children;
   final String? dataTableBlueprintUrl;
   final String? searchBlueprintUrl;
@@ -59,6 +63,8 @@ class Product {
     this.unitSize,
     this.unitType,
     this.price,
+    this.mrp,
+    this.variants = const [],
   });
 
   final String name;
@@ -75,6 +81,12 @@ class Product {
   final String? unitSize;
   final String? unitType;
   final Object? price;
+
+  /// Maximum retail price, shown struck through when above [price].
+  final Object? mrp;
+
+  /// Pack sizes the product comes in (from the product details response).
+  final List<ProductVariant> variants;
 
   /// Business-defined product name shown in cards.
   String get cardTitle => [brand, name, flavour, lifeStage, petType, category]
@@ -100,6 +112,30 @@ class Product {
     }
     return '$size $type';
   }
+}
+
+/// One pack size of a product: its own id, size, price, MRP and images.
+class ProductVariant {
+  const ProductVariant({
+    this.variantId,
+    this.unitSize,
+    this.unitType,
+    this.price,
+    this.mrp,
+    this.images = const [],
+    this.isDefault = false,
+  });
+
+  final String? variantId;
+  final String? unitSize;
+  final String? unitType;
+  final Object? price;
+  final Object? mrp;
+  final List<String> images;
+  final bool isDefault;
+
+  String get unitLabel =>
+      Product(name: '', unitSize: unitSize, unitType: unitType).unitLabel;
 }
 
 class CartItem {

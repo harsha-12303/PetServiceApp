@@ -3,11 +3,14 @@ import 'dart:typed_data';
 import '../entities/models.dart';
 
 abstract class AdminModuleRepository {
+  /// Pass the [configuration] from an earlier load of the same open page to
+  /// skip re-downloading its table blueprint (e.g. while searching).
   Future<AdminModuleData> load(
     String bearerToken,
     MenuItem item, {
     String? parentCode,
     Map<String, String> filters = const {},
+    AdminModuleConfiguration? configuration,
   });
 
   Future<AdminModuleConfiguration> loadConfiguration(
@@ -346,6 +349,7 @@ class SearchFilterField {
     this.dependencies = const [],
     this.visibilityCriteria,
     this.quickSearch = true,
+    this.minLength = 1,
   });
 
   final String field;
@@ -355,7 +359,15 @@ class SearchFilterField {
   final Future<Map<String, String>> Function(Map<String, String>)? loadOptions;
   final List<String> dependencies;
   final String? visibilityCriteria;
+
+  /// Shown inline on the page when true; otherwise in the Filters box.
   final bool quickSearch;
+
+  /// Text filters apply once the trimmed text is at least this long
+  /// (`rules[0].minSize`, default 1).
+  final int minLength;
+
+  bool get isText => options == null && loadOptions == null;
 
   bool isVisible(Map<String, String> values) {
     if (dependencies.any((key) => values[key]?.isNotEmpty != true)) {

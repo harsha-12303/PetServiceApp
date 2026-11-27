@@ -35,6 +35,28 @@ class CreateOrderViewModel extends ChangeNotifier {
       _getBrandNames(bearerToken);
   ProductFilters filters = const ProductFilters();
   int _productRequest = 0;
+
+  /// Last product list loaded without filters, for instant narrowing.
+  List<Product>? _unfiltered;
+
+  /// Instant feedback while typing a name: narrow the unfiltered list
+  /// locally; the server search (debounced) replaces it shortly after.
+  void narrowInstantly(String text) {
+    final base = _unfiltered;
+    if (base == null || _disposed) return;
+    // Drop any older search still in flight so it can't overwrite this.
+    _productRequest++;
+    isLoading = false;
+    final q = text.trim().toLowerCase();
+    products = q.isEmpty
+        ? base
+        : base
+            .where((p) => p.name.toLowerCase().contains(q))
+            .toList(growable: false);
+    errorMessage = null;
+    notifyListeners();
+  }
+
   bool _disposed = false;
   int quantityFor(String? variantId) => cart.quantityFor(variantId);
   int get cartItemCount => cart.itemCount;
@@ -50,7 +72,10 @@ class CreateOrderViewModel extends ChangeNotifier {
         if (_ownsCart) cart.load(bearerToken),
       ]);
       if (_disposed) return;
-      if (request == _productRequest) products = results[0] as List<Product>;
+      if (request == _productRequest) {
+        products = results[0] as List<Product>;
+        if (filters.queryParameters.isEmpty) _unfiltered = products;
+      }
     } on AppException catch (error) {
       if (request == _productRequest) errorMessage = error.message;
     } on Exception {
@@ -77,7 +102,10 @@ class CreateOrderViewModel extends ChangeNotifier {
       if (debounce != Duration.zero) await Future<void>.delayed(debounce);
       if (request != _productRequest) return;
       final results = await _getProducts(bearerToken, value);
-      if (request == _productRequest) products = results;
+      if (request == _productRequest) {
+        products = results;
+        if (value.queryParameters.isEmpty) _unfiltered = results;
+      }
     } on AppException catch (error) {
       if (request == _productRequest) errorMessage = error.message;
     } on Exception {

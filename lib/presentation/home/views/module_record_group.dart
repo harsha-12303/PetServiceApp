@@ -54,7 +54,8 @@ class _ModuleRecordGroupState extends State<ModuleRecordGroup> {
         for (final field in group.fields) {
           if (field.fieldType == 'fileupload' &&
               field.isRequired &&
-              _selectedFiles(row, field).isEmpty) {
+              _selectedFiles(row, field).isEmpty &&
+              _existingUrls(row, field).isEmpty) {
             return 'Choose ${field.input.label} for every size.';
           }
         }
@@ -292,13 +293,57 @@ class _ModuleRecordGroupState extends State<ModuleRecordGroup> {
     return value is List<ModuleFormFile> ? value : const [];
   }
 
+  /// Images already on the server (when editing): a URL or a list of URLs.
+  List<String> _existingUrls(Map<String, Object?> row, ModuleFormField field) {
+    final value = row[field.input.field];
+    if (value is List<ModuleFormFile>) return const [];
+    if (value is String) return value.trim().isEmpty ? const [] : [value];
+    if (value is List) {
+      return [
+        for (final item in value)
+          if (item is String && item.trim().isNotEmpty)
+            item
+          else if (item is Map && item['url'] is String)
+            item['url'] as String,
+      ];
+    }
+    return const [];
+  }
+
+  String _fileName(String url) {
+    final path = Uri.tryParse(url)?.pathSegments;
+    return path == null || path.isEmpty ? url : Uri.decodeComponent(path.last);
+  }
+
   Widget _uploadField(Map<String, Object?> row, ModuleFormField field) {
     final selected = _selectedFiles(row, field);
+    final existing = _existingUrls(row, field);
     final enabled = widget.enabled && !_picking;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(field.input.label),
+        if (existing.isNotEmpty)
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final url in existing)
+                InputChip(
+                  avatar: const Icon(Icons.image_outlined, size: 18),
+                  label: Text(_fileName(url), overflow: TextOverflow.ellipsis),
+                  tooltip: 'Current image',
+                  // Removing it sends the URL in `removeImages` on save.
+                  onDeleted: !enabled
+                      ? null
+                      : () => setState(() {
+                            row[field.input.field] = <String>[
+                              for (final other in existing)
+                                if (other != url) other,
+                            ];
+                          }),
+                ),
+            ],
+          ),
         if (selected.isNotEmpty)
           Wrap(
             spacing: 8,

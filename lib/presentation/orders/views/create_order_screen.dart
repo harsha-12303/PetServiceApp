@@ -13,7 +13,7 @@ import 'product_detail_screen.dart';
 import 'cart_screen.dart';
 import '../viewmodels/cart_view_model.dart';
 import '../viewmodels/create_order_view_model.dart';
-import '../../shared/widgets/search_filter_panel.dart';
+import '../../shared/widgets/blueprint_search_bar.dart';
 import '../../shared/widgets/product_card.dart';
 
 class CreateOrderScreen extends StatefulWidget {
@@ -37,13 +37,15 @@ class CreateOrderScreen extends StatefulWidget {
 
 class _CreateOrderScreenState extends State<CreateOrderScreen> {
   late final CreateOrderViewModel _viewModel;
-  final _searchController = TextEditingController();
-  late bool _isSearching;
   Map<String, String> _filterValues = {};
+
+  /// Search-by-name in the header (🔍); opened straight away when this
+  /// screen was opened for searching.
+  late final _headerSearch =
+      HeaderSearchController(open: widget.openInSearchMode);
   @override
   void initState() {
     super.initState();
-    _isSearching = widget.openInSearchMode;
     _viewModel = CreateOrderViewModel(
       GetProductsUseCase(widget.catalogRepository),
       GetBrandNamesUseCase(widget.catalogRepository),
@@ -62,7 +64,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
     _viewModel.removeListener(_refresh);
     _viewModel.cart.removeListener(_refresh);
     _viewModel.dispose();
-    _searchController.dispose();
+    _headerSearch.dispose();
     super.dispose();
   }
 
@@ -70,15 +72,12 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
     if (mounted) setState(() {});
   }
 
-  void _applyFilters({Duration debounce = Duration.zero}) {
-    final query = _searchController.text.trim();
+  /// Every active filter (inline and Filters box) goes as a query param.
+  /// The search bar already debounces typing.
+  void _applyFilters() {
     _viewModel.applyFilters(
       widget.bearerToken,
-      ProductFilters(
-        query: query,
-        additionalParameters: _filterValues,
-      ),
-      debounce: debounce,
+      ProductFilters(additionalParameters: _filterValues),
     );
   }
 
@@ -116,54 +115,14 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
   @override
   Widget build(BuildContext context) => Scaffold(
         appBar: AppBar(
-          title: _isSearching
-              ? TextField(
-                  controller: _searchController,
-                  autofocus: true,
-                  textInputAction: TextInputAction.search,
-                  onChanged: (_) => _applyFilters(
-                      debounce: const Duration(milliseconds: 250)),
-                  onSubmitted: (_) {
-                    _applyFilters();
-                    if (!widget.openInSearchMode) {
-                      setState(() => _isSearching = false);
-                    }
-                  },
-                  decoration: const InputDecoration(
-                    hintText: 'Search products',
-                    isDense: true,
-                    fillColor: AppColors.background,
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  ),
-                )
-              : const Text('Create Order'),
+          title: HeaderSearchTitle(
+            title: Text(
+                widget.openInSearchMode ? 'Search products' : 'Create Order'),
+            controller: _headerSearch,
+            hint: 'Search products…',
+          ),
           actions: [
-            IconButton(
-              tooltip: 'Filters',
-              onPressed: _openFilters,
-              icon: const Icon(Icons.tune_rounded),
-            ),
-            IconButton(
-              tooltip: _isSearching ? 'Close search' : 'Search products',
-              onPressed: () {
-                if (widget.openInSearchMode) {
-                  Navigator.of(context).pop();
-                  return;
-                }
-                if (_isSearching) {
-                  setState(() {
-                    _isSearching = false;
-                    _searchController.clear();
-                  });
-                  _applyFilters();
-                } else {
-                  setState(() => _isSearching = true);
-                }
-              },
-              icon: Icon(
-                  _isSearching ? Icons.close_rounded : Icons.search_rounded),
-            ),
+            HeaderSearchButton(controller: _headerSearch),
             TextButton.icon(
               onPressed: _openCart,
               icon: const Icon(Icons.shopping_cart_outlined),
@@ -177,59 +136,107 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
             const SizedBox(width: 8),
           ],
         ),
-        body: _viewModel.isLoading
-            ? const Padding(
-                padding: EdgeInsets.all(32),
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  child: CircularProgressIndicator(color: AppColors.primary),
-                ),
-              )
-            : _viewModel.errorMessage != null || _viewModel.products.isEmpty
-                ? Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Text(
-                        _viewModel.errorMessage ?? 'No products found.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                : ProductGrid(
-                    itemCount: _viewModel.products.length,
-                    itemBuilder: (context, index) {
-                      final product = _viewModel.products[index];
-                      final quantity =
-                          _viewModel.quantityFor(product.variantId);
-                      return ProductCard(
-                        product: product,
-                        onTap: product.variantId?.isNotEmpty == true
-                            ? () =>
-                                Navigator.of(context).push(MaterialPageRoute(
-                                  builder: (_) => ProductDetailScreen(
-                                    product: product,
-                                    bearerToken: widget.bearerToken,
-                                    catalogRepository: widget.catalogRepository,
-                                    cartViewModel: _viewModel.cart,
-                                    onSearchRequested: _openProductSearch,
-                                  ),
-                                ))
-                            : null,
-                        actions: _ProductCartAction(
-                          quantity: quantity,
-                          isUpdating:
-                              _viewModel.cart.isUpdating(product.variantId),
-                          onIncrease: () =>
-                              _changeQuantity(product, quantity + 1),
-                          onDecrease: () =>
-                              _changeQuantity(product, quantity - 1),
-                          onAdd: () => _addToCart(product),
-                        ),
-                      );
-                    },
-                  ),
+        body: Column(children: [
+          // Quick filters inline; the rest in the Filters box.
+          BlueprintSearchBar(
+            load: _loadFilterFields,
+            values: _filterValues,
+            searchHint: 'Search products',
+            onTyping: _viewModel.narrowInstantly,
+            headerSearch: _headerSearch,
+            onChanged: (values) {
+              _filterValues = values;
+              _applyFilters();
+            },
+          ),
+          Expanded(
+            child: RefreshIndicator(
+              onRefresh: _reload,
+              child: _productArea(),
+            ),
+          ),
+        ]),
       );
+
+  /// Reloads products (with the current filters) and the cart.
+  Future<void> _reload() => _viewModel.load(widget.bearerToken);
+
+  /// Makes [child] pullable even when it doesn't fill the screen.
+  Widget _pullable(Widget child) => LayoutBuilder(
+        builder: (context, constraints) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            SizedBox(height: constraints.maxHeight, child: child),
+          ],
+        ),
+      );
+
+  Widget _productArea() {
+    final products = _viewModel.products;
+    // First load: spinner. Searches and refreshes keep the current products
+    // on screen with a thin progress bar instead of blanking the grid.
+    if (_viewModel.isLoading && products.isEmpty) {
+      return _pullable(const Padding(
+        padding: EdgeInsets.all(32),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: CircularProgressIndicator(color: AppColors.primary),
+        ),
+      ));
+    }
+    if (!_viewModel.isLoading &&
+        (_viewModel.errorMessage != null || products.isEmpty)) {
+      return _pullable(Padding(
+        padding: const EdgeInsets.all(24),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Text(
+            _viewModel.errorMessage ?? 'No products found.',
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ));
+    }
+    return Stack(children: [
+      Positioned.fill(
+        child: ProductGrid(
+          itemCount: _viewModel.products.length,
+          itemBuilder: (context, index) {
+            final product = _viewModel.products[index];
+            final quantity = _viewModel.quantityFor(product.variantId);
+            return ProductCard(
+              product: product,
+              onTap: product.variantId?.isNotEmpty == true
+                  ? () => Navigator.of(context).push(MaterialPageRoute(
+                        builder: (_) => ProductDetailScreen(
+                          product: product,
+                          bearerToken: widget.bearerToken,
+                          catalogRepository: widget.catalogRepository,
+                          cartViewModel: _viewModel.cart,
+                          onSearchRequested: _openProductSearch,
+                        ),
+                      ))
+                  : null,
+              actions: _ProductCartAction(
+                quantity: quantity,
+                isUpdating: _viewModel.cart.isUpdating(product.variantId),
+                onIncrease: () => _changeQuantity(product, quantity + 1),
+                onDecrease: () => _changeQuantity(product, quantity - 1),
+                onAdd: () => _addToCart(product),
+              ),
+            );
+          },
+        ),
+      ),
+      if (_viewModel.isLoading)
+        const Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: LinearProgressIndicator(minHeight: 2),
+        ),
+    ]);
+  }
 
   void _openProductSearch() {
     Navigator.of(context).push(MaterialPageRoute(
@@ -259,14 +266,22 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
     if (fields != null) return fields;
     final brands = await _viewModel.loadBrandNames(widget.bearerToken);
     return [
+      const SearchFilterField(
+        field: 'q',
+        label: 'Search products',
+        placeholder: 'Search products',
+        quickSearch: true,
+      ),
       SearchFilterField(
         field: 'brandName',
         label: 'Brand',
         options: {for (final brand in brands) brand: brand},
+        quickSearch: false,
       ),
       const SearchFilterField(
         field: 'productType',
         label: 'Product Type',
+        quickSearch: false,
         options: {
           'Food': 'Food',
           'Medicine': 'Medicine',
@@ -277,24 +292,10 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
       const SearchFilterField(
         field: 'petType',
         label: 'Pet Type',
+        quickSearch: false,
         options: {'Cat': 'Cat', 'Dog': 'Dog'},
       ),
     ];
-  }
-
-  Future<void> _openFilters() async {
-    final values = await showModalBottomSheet<Map<String, String>>(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: AppColors.background,
-      builder: (_) => SearchFilterPanel(
-        load: _loadFilterFields,
-        initialValues: _filterValues,
-      ),
-    );
-    if (!mounted || values == null) return;
-    _filterValues = values;
-    _applyFilters();
   }
 }
 

@@ -19,5 +19,21 @@ Product productFromRecord(Map record, {List<String>? imageUrls}) {
     unitSize: record['unitSize']?.toString(),
     unitType: record['unitType']?.toString(),
     price: record['finalPrice'],
+    mrp: record['mrpPrice'] ?? record['mrp'],
+    variants: [
+      if (record['variants'] is List)
+        for (final v in (record['variants'] as List).whereType<Map>())
+          ProductVariant(
+            variantId:
+                (v['variantId'] ?? v['varientId'] ?? v['id'])?.toString(),
+            unitSize: v['unitSize']?.toString(),
+            unitType: v['unitType']?.toString(),
+            price: v['finalPrice'] ?? v['price'],
+            mrp: v['mrpPrice'] ?? v['mrp'],
+            images: ProductImagePaths.fromRecord(v),
+            isDefault: v['isDefault'] == true ||
+                v['isDefault']?.toString().toLowerCase() == 'true',
+          ),
+    ],
   );
 }

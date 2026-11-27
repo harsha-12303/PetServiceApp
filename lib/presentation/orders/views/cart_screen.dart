@@ -419,6 +419,8 @@ class _CartImage extends StatelessWidget {
         url!,
         height: 72,
         width: 72,
+        // Decode near display size: full-size photos make scrolling janky.
+        cacheWidth: 216,
         fit: BoxFit.cover,
         errorBuilder: (_, __, ___) => placeholder,
       ),
