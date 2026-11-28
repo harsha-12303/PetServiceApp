@@ -1663,6 +1663,10 @@ void main() {
       ),
     ));
     await tester.pumpAndSettle();
+    expect(
+      tester.getBottomRight(find.widgetWithText(FilledButton, 'Add +')).dy,
+      lessThan(tester.getTopLeft(find.text('Test kibble')).dy),
+    );
     await tester.tap(find.text('Test kibble'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add +'));

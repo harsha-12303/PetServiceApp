@@ -201,6 +201,8 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
       Positioned.fill(
         child: ProductGrid(
           itemCount: _viewModel.products.length,
+          itemHeight: 280,
+          maxWideCardWidth: 230,
           itemBuilder: (context, index) {
             final product = _viewModel.products[index];
             final quantity = _viewModel.quantityFor(product.variantId);
@@ -217,7 +219,7 @@ class _CreateOrderScreenState extends State<CreateOrderScreen> {
                         ),
                       ))
                   : null,
-              actions: _ProductCartAction(
+              imageAction: _ProductCartAction(
                 quantity: quantity,
                 isUpdating: _viewModel.cart.isUpdating(product.variantId),
                 onIncrease: () => _changeQuantity(product, quantity + 1),
@@ -326,24 +328,16 @@ class _ProductCartAction extends StatelessWidget {
     }
     return SizedBox(
       height: 34,
-      child: FilledButton.icon(
+      child: FilledButton(
         style: FilledButton.styleFrom(
           minimumSize: Size.zero,
+          elevation: 3,
+          shadowColor: AppColors.primaryDark.withValues(alpha: 0.35),
           padding: const EdgeInsets.symmetric(horizontal: 12),
           textStyle: const TextStyle(fontSize: 12),
         ),
         onPressed: isUpdating ? null : onAdd,
-        icon: isUpdating
-            ? const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(
-                  color: AppColors.onPrimary,
-                  strokeWidth: 2,
-                ),
-              )
-            : const Icon(Icons.add_shopping_cart_outlined, size: 16),
-        label: const Text('Add +'),
+        child: const Text('Add +'),
       ),
     );
   }

@@ -376,7 +376,7 @@ class _StickyCartAction extends StatelessWidget {
       return SizedBox(
         height: 52,
         width: double.infinity,
-        child: FilledButton.icon(
+        child: FilledButton(
           style: FilledButton.styleFrom(
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -384,17 +384,7 @@ class _StickyCartAction extends StatelessWidget {
                 const TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
           ),
           onPressed: isUpdating || isLoading ? null : onAdd,
-          icon: isUpdating || isLoading
-              ? const SizedBox(
-                  height: 18,
-                  width: 18,
-                  child: CircularProgressIndicator(
-                    color: AppColors.onPrimary,
-                    strokeWidth: 2,
-                  ),
-                )
-              : const Icon(Icons.add_shopping_cart_outlined),
-          label: const Text('Add +'),
+          child: const Text('Add +'),
         ),
       );
     }
@@ -512,8 +502,6 @@ class _ProductDetails extends StatelessWidget {
         const SizedBox(height: 18),
         _InfoPill(icon: Icons.scale_outlined, text: product.unitLabel),
       ],
-      const SizedBox(height: 22),
-      const _Highlights(),
       if (hasDescription) ...[
         const _SectionDivider(),
         const _SectionTitle('About this product'),
@@ -774,32 +762,6 @@ class _VariantCard extends StatelessWidget {
       ),
     );
   }
-}
-
-/// Small reassurance strip. Only states what's true today: payment is cash
-/// on delivery.
-class _Highlights extends StatelessWidget {
-  const _Highlights();
-
-  @override
-  Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-        decoration: BoxDecoration(
-          color: AppColors.primarySoft,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: const Row(children: [
-          Icon(Icons.payments_outlined, color: AppColors.primary, size: 22),
-          SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'Cash on delivery available',
-              style:
-                  TextStyle(fontWeight: FontWeight.w600, color: AppColors.text),
-            ),
-          ),
-        ]),
-      );
 }
 
 class _SectionTitle extends StatelessWidget {
