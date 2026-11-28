@@ -86,9 +86,94 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
     );
   }
 
+  /// Horizontal padding that centres content on tablets; null on phones.
+  static double? _tabletGutter(double width) {
+    if (width < _tabletBreakpoint) return null;
+    final maxContent = width >= _wideBreakpoint ? _wideMaxWidth : _narrowMaxWidth;
+    final gutter = (width - maxContent) / 2;
+    return gutter < 24 ? 24 : gutter;
+  }
+
+  Widget _addressPanel({required bool tablet}) => _AddressPanel(
+        tablet: tablet,
+        formKey: _formKey,
+        addressType: _addressType,
+        onAddressTypeChanged: (value) => setState(() => _addressType = value),
+        name: _name,
+        phone: _phone,
+        street: _street,
+        landmark: _landmark,
+        city: _city,
+        state: _state,
+        pincode: _pincode,
+        onSave: _saveAddress,
+      );
+
+  Widget _orderItemsPanel() => _OrderItemsPanel(
+        items: _cart.items,
+        isUpdating: _cart.isUpdating,
+        onIncrease: (item) => _changeQuantity(item, item.quantity + 1),
+        onDecrease: (item) => _changeQuantity(item, item.quantity - 1),
+      );
+
+  Widget _content(num total) => LayoutBuilder(builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final gutter = _tabletGutter(width);
+
+        // Phone: original single-column layout, unchanged.
+        if (gutter == null) {
+          return ListView(
+            padding: const EdgeInsets.fromLTRB(12, 14, 12, 20),
+            children: [
+              _addressPanel(tablet: false),
+              const SizedBox(height: 12),
+              _orderItemsPanel(),
+              const SizedBox(height: 12),
+              _BillPanel(total: total),
+              const SizedBox(height: 12),
+              const _PaymentPanel(),
+            ],
+          );
+        }
+
+        final padding = EdgeInsets.fromLTRB(gutter, 24, gutter, 24);
+
+        // Wide tablet / landscape: address on the left, summary on the right.
+        if (width >= _wideBreakpoint) {
+          return ListView(padding: padding, children: [
+            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Expanded(flex: 3, child: _addressPanel(tablet: true)),
+              const SizedBox(width: 20),
+              Expanded(
+                flex: 2,
+                child: Column(children: [
+                  _orderItemsPanel(),
+                  const SizedBox(height: 16),
+                  _BillPanel(total: total),
+                  const SizedBox(height: 16),
+                  const _PaymentPanel(),
+                ]),
+              ),
+            ]),
+          ]);
+        }
+
+        // Portrait tablet: single centred column with a comfortable width.
+        return ListView(padding: padding, children: [
+          _addressPanel(tablet: true),
+          const SizedBox(height: 16),
+          _orderItemsPanel(),
+          const SizedBox(height: 16),
+          _BillPanel(total: total),
+          const SizedBox(height: 16),
+          const _PaymentPanel(),
+        ]);
+      });
+
   @override
   Widget build(BuildContext context) {
     final total = _total(_cart.items);
+    final footerGutter = _tabletGutter(MediaQuery.sizeOf(context).width);
     return Scaffold(
       appBar: AppBar(
         title: const Text('Checkout',
@@ -105,50 +190,27 @@ class _CheckoutScreenState extends State<CheckoutScreen> {
               ? Center(child: Text(_cart.errorMessage!))
               : _cart.items.isEmpty
                   ? const Center(child: Text('Your cart is empty.'))
-                  : ListView(
-                      padding: const EdgeInsets.fromLTRB(12, 14, 12, 20),
-                      children: [
-                        _AddressPanel(
-                          formKey: _formKey,
-                          addressType: _addressType,
-                          onAddressTypeChanged: (value) =>
-                              setState(() => _addressType = value),
-                          name: _name,
-                          phone: _phone,
-                          street: _street,
-                          landmark: _landmark,
-                          city: _city,
-                          state: _state,
-                          pincode: _pincode,
-                          onSave: _saveAddress,
-                        ),
-                        const SizedBox(height: 12),
-                        _OrderItemsPanel(
-                          items: _cart.items,
-                          isUpdating: _cart.isUpdating,
-                          onIncrease: (item) =>
-                              _changeQuantity(item, item.quantity + 1),
-                          onDecrease: (item) =>
-                              _changeQuantity(item, item.quantity - 1),
-                        ),
-                        const SizedBox(height: 12),
-                        _BillPanel(total: total),
-                        const SizedBox(height: 12),
-                        const _PaymentPanel(),
-                      ],
-                    ),
+                  : _content(total),
       bottomNavigationBar: _cart.items.isEmpty || _cart.isLoading
           ? null
           : SafeArea(
-              minimum: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              minimum: footerGutter == null
+                  ? const EdgeInsets.fromLTRB(12, 8, 12, 8)
+                  : EdgeInsets.fromLTRB(footerGutter, 10, footerGutter, 12),
               child: _CheckoutFooter(total: total),
             ),
     );
   }
 }
 
+const double _tabletBreakpoint = 600;
+const double _wideBreakpoint = 900;
+const double _narrowMaxWidth = 680;
+const double _wideMaxWidth = 1180;
+
 class _AddressPanel extends StatelessWidget {
   const _AddressPanel({
+    this.tablet = false,
     required this.formKey,
     required this.addressType,
     required this.onAddressTypeChanged,
@@ -172,9 +234,117 @@ class _AddressPanel extends StatelessWidget {
   final TextEditingController state;
   final TextEditingController pincode;
   final VoidCallback onSave;
+  final bool tablet;
 
   @override
-  Widget build(BuildContext context) => _Panel(
+  Widget build(BuildContext context) =>
+      tablet ? _buildTablet(context) : _buildPhone(context);
+
+  Widget _buildTablet(BuildContext context) {
+    const gap = SizedBox(height: 14);
+    const hGap = SizedBox(width: 12);
+    return _Panel(
+      padding: 20,
+      child: Form(
+        key: formKey,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          const _PanelHeader(
+            icon: Icons.location_on_outlined,
+            title: 'Delivery address',
+            subtitle: 'Add address to deliver to',
+          ),
+          const SizedBox(height: 18),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final entry in const {
+                'Home': Icons.home_outlined,
+                'Work': Icons.work_outline,
+                'Other': Icons.place_outlined,
+              }.entries)
+                _AddressTypeChip(
+                  label: entry.key,
+                  icon: entry.value,
+                  selected: addressType == entry.key,
+                  onTap: () => onAddressTypeChanged(entry.key),
+                ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+                child: _Input(
+                    tablet: true,
+                    label: 'Full name',
+                    required: true,
+                    controller: name)),
+            hGap,
+            Expanded(
+                child: _Input(
+                    tablet: true,
+                    label: 'Phone',
+                    required: true,
+                    controller: phone,
+                    keyboardType: TextInputType.phone)),
+          ]),
+          gap,
+          _Input(
+              tablet: true,
+              label: 'House / flat / street',
+              required: true,
+              controller: street),
+          gap,
+          _Input(tablet: true, label: 'Area / landmark', controller: landmark),
+          gap,
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+                flex: 3,
+                child: _Input(
+                    tablet: true,
+                    label: 'City',
+                    required: true,
+                    controller: city)),
+            hGap,
+            Expanded(
+                flex: 3,
+                child: _Input(
+                    tablet: true,
+                    label: 'State',
+                    required: true,
+                    controller: state)),
+            hGap,
+            Expanded(
+                flex: 2,
+                child: _Input(
+                    tablet: true,
+                    label: 'Pincode',
+                    required: true,
+                    controller: pincode,
+                    keyboardType: TextInputType.number)),
+          ]),
+          const SizedBox(height: 20),
+          Align(
+            alignment: Alignment.centerRight,
+            child: FilledButton.icon(
+              onPressed: onSave,
+              icon: const Icon(Icons.check, size: 18),
+              label: const Text('Save address'),
+              style: FilledButton.styleFrom(
+                minimumSize: const Size(160, 44),
+                textStyle:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildPhone(BuildContext context) => _Panel(
         child: Form(
           key: formKey,
           child:
@@ -264,20 +434,116 @@ class _AddressPanel extends StatelessWidget {
       );
 }
 
+class _AddressTypeChip extends StatelessWidget {
+  const _AddressTypeChip({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = selected ? AppColors.onPrimary : AppColors.text;
+    return Material(
+      color: selected ? AppColors.primary : AppColors.background,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(
+            color: selected ? AppColors.primary : AppColors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          height: 40,
+          constraints: const BoxConstraints(minWidth: 110),
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, size: 18, color: fg),
+              const SizedBox(width: 8),
+              Text(label,
+                  style: TextStyle(
+                      fontSize: 14, fontWeight: FontWeight.w600, color: fg)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Input extends StatelessWidget {
   const _Input({
     required this.label,
     required this.controller,
     this.required = false,
     this.keyboardType,
+    this.tablet = false,
   });
   final String label;
   final TextEditingController controller;
   final bool required;
   final TextInputType? keyboardType;
+  final bool tablet;
 
   @override
-  Widget build(BuildContext context) => Column(
+  Widget build(BuildContext context) =>
+      tablet ? _buildTablet() : _buildPhone();
+
+  Widget _buildTablet() {
+    final radius = BorderRadius.circular(8);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(text: label, children: [
+            if (required)
+              const TextSpan(
+                  text: ' *', style: TextStyle(color: AppColors.primary)),
+          ]),
+          style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.text),
+        ),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: controller,
+          keyboardType: keyboardType,
+          validator: required
+              ? (value) =>
+                  value == null || value.trim().isEmpty ? 'Required' : null
+              : null,
+          style: const TextStyle(fontSize: 15),
+          decoration: InputDecoration(
+            isDense: true,
+            filled: true,
+            fillColor: AppColors.card,
+            contentPadding:
+                const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            border: OutlineInputBorder(borderRadius: radius),
+            enabledBorder: OutlineInputBorder(
+                borderRadius: radius,
+                borderSide: const BorderSide(color: AppColors.border)),
+            focusedBorder: OutlineInputBorder(
+                borderRadius: radius,
+                borderSide:
+                    const BorderSide(color: AppColors.primary, width: 1.5)),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPhone() => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('$label${required ? ' *' : ''}',
@@ -509,11 +775,12 @@ class _CheckoutFooter extends StatelessWidget {
 }
 
 class _Panel extends StatelessWidget {
-  const _Panel({required this.child});
+  const _Panel({required this.child, this.padding = 12});
   final Widget child;
+  final double padding;
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(12),
+        padding: EdgeInsets.all(padding),
         decoration: BoxDecoration(
           color: AppColors.card,
           border: Border.all(color: AppColors.border),
