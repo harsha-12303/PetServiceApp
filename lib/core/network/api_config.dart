@@ -1,6 +1,6 @@
 abstract final class ApiConfig {
   static const baseUrl =
-      'https://preservation-owners-felt-feedback.trycloudflare.com';
+      'https://distance-laura-fits-concerned.trycloudflare.com';
   static const platformVersion = 'v1';
 
   /// Keeps full external image URLs (for example Google Cloud Storage) intact.

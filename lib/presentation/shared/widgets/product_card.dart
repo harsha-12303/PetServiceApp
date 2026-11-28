@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -12,10 +13,14 @@ class ProductGrid extends StatelessWidget {
     required this.itemCount,
     required this.itemBuilder,
     this.bottomPadding,
+    this.itemHeight,
+    this.maxWideCardWidth,
   });
 
   /// Extra space below the last row (e.g. room for a floating button).
   final double? bottomPadding;
+  final double? itemHeight;
+  final double? maxWideCardWidth;
   final int itemCount;
   final IndexedWidgetBuilder itemBuilder;
 
@@ -24,23 +29,34 @@ class ProductGrid extends StatelessWidget {
         builder: (context, constraints) {
           final width = constraints.maxWidth;
           final isTablet = width >= 600;
+          final columns = width >= 1100 ? 4 : (isTablet ? 3 : 2);
+          final padding = isTablet ? 24.0 : 16.0;
+          const spacing = 12.0;
+          final wideCardWidth = maxWideCardWidth;
+          final gridWidth = isTablet && wideCardWidth != null
+              ? math.min(
+                  1200.0,
+                  columns * wideCardWidth +
+                      (columns - 1) * spacing +
+                      2 * padding)
+              : 1200.0;
           return Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1200),
+              constraints: BoxConstraints(maxWidth: gridWidth),
               child: GridView.builder(
                 physics: const AlwaysScrollableScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(
-                  isTablet ? 24 : 16,
-                  isTablet ? 24 : 16,
-                  isTablet ? 24 : 16,
-                  bottomPadding ?? (isTablet ? 24 : 16),
+                  padding,
+                  padding,
+                  padding,
+                  bottomPadding ?? padding,
                 ),
                 itemCount: itemCount,
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: width >= 1100 ? 4 : (isTablet ? 3 : 2),
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  mainAxisExtent: isTablet ? 320 : 330,
+                  crossAxisCount: columns,
+                  mainAxisSpacing: spacing,
+                  crossAxisSpacing: spacing,
+                  mainAxisExtent: itemHeight ?? (isTablet ? 320 : 330),
                 ),
                 itemBuilder: itemBuilder,
               ),
@@ -57,12 +73,14 @@ class ProductCard extends StatelessWidget {
     this.imageBytes,
     this.onTap,
     this.actions,
+    this.imageAction,
   });
 
   final Product product;
   final Uint8List? imageBytes;
   final VoidCallback? onTap;
   final Widget? actions;
+  final Widget? imageAction;
 
   @override
   Widget build(BuildContext context) {
@@ -92,9 +110,20 @@ class ProductCard extends StatelessWidget {
               Flexible(
                 child: SizedBox(
                   height: 180,
-                  child: Center(
-                    child: FittedBox(
-                        fit: BoxFit.scaleDown, child: _image(context)),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      Center(
+                        child: FittedBox(
+                            fit: BoxFit.scaleDown, child: _image(context)),
+                      ),
+                      if (imageAction != null)
+                        PositionedDirectional(
+                          end: 4,
+                          bottom: 4,
+                          child: imageAction!,
+                        ),
+                    ],
                   ),
                 ),
               ),
